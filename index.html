@@ -1,0 +1,1012 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>flow.hoc.run</title>
+<link rel="stylesheet" href="https://ad.hoc.run/global.css">
+<style>
+html, body { overflow: hidden; }
+body { height: 100%; }
+
+.topbar > div { display: flex; align-items: center; gap: 8px; }
+.prompt { white-space: nowrap; }
+button:disabled { opacity: 0.3; cursor: default; pointer-events: none; }
+.topbar button { padding: 2px 9px; font-size: 11px; }
+.topbar button.active { background: var(--accent); color: var(--bg); }
+.topbar input[type="number"] { width: 44px; padding: 2px 4px; font-size: 11px; text-align: center; -moz-appearance: textfield; appearance: textfield; }
+.topbar input[type="number"]::-webkit-inner-spin-button,
+.topbar input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.topbar label { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--dim); white-space: nowrap; }
+.topbar .sep { width: 1px; height: 16px; background: var(--border); flex-shrink: 0; }
+.controls { margin-left: auto; }
+
+#main { flex: 1; display: flex; min-height: 0; }
+#canvas-wrap { flex: 1; position: relative; overflow: hidden; }
+canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+
+#right-panel { width: 320px; display: flex; flex-direction: column; border-left: 1px solid var(--border); overflow: hidden; }
+#right-panel.hidden { display: none; }
+.sub-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+#txt { flex: 1; resize: none; padding: 10px; font-family: var(--font); font-size: 13px; border: none; outline: none; background: var(--bg); color: var(--fg); line-height: 1.6; tab-size: 2; }
+
+.panel-foot { padding: 6px 8px; border-top: 1px solid var(--border); }
+.panel-foot button { width: 100%; font-size: 11px; }
+
+#history-list { flex: 1; overflow-y: auto; }
+.hist-entry { padding: 7px 12px; font-size: 12px; color: var(--dim); cursor: pointer; border-bottom: 1px solid var(--border); transition: color 0.1s; }
+.hist-entry:hover { color: var(--fg); }
+.hist-entry.current { color: var(--accent); border-left: 2px solid var(--accent); padding-left: 10px; }
+
+#ctx-menu { position: absolute; background: var(--bg); border: 1px solid var(--border); box-shadow: 2px 2px 12px rgba(0,0,0,.8); display: none; z-index: 100; min-width: 140px; }
+#ctx-menu div { padding: 7px 16px; cursor: pointer; font-size: 13px; color: var(--dim); transition: color 0.1s, background 0.1s; }
+#ctx-menu div:hover { color: var(--fg); background: var(--border); }
+
+#node-input { position: absolute; display: none; z-index: 50; border: none; outline: 1px solid var(--accent); font-family: var(--font); text-align: center; background: var(--bg); color: var(--fg); resize: none; overflow: hidden; word-wrap: break-word; }
+
+#edge-label-input { position: absolute; display: none; z-index: 51; border: none; outline: 1px solid var(--accent); font-family: var(--font); font-size: 12px; text-align: center; background: var(--bg); color: var(--fg); padding: 1px 6px; min-width: 80px; transform: translate(-50%, -50%); }
+
+#mode-bar { position: absolute; top: 10px; left: 10px; background: rgba(0,255,136,.12); color: var(--accent); border: 1px solid rgba(0,255,136,.4); padding: 4px 12px; font-size: 12px; display: none; z-index: 50; pointer-events: none; }
+</style>
+</head>
+<body>
+
+<div hidden id="ai-guide">
+AI AGENT GUIDE — flow.hoc.run
+
+This page is a canvas-based flowchart editor. When a user asks you to make a
+flow.hoc.run flowchart, produce a mermaid text block they can paste into the
+editor's right-hand text panel, then press Apply or Ctrl+Enter to render it.
+
+── Syntax ──────────────────────────────────────────────────────────────────
+
+graph TD                    required first line
+                            TD = top-down  LR = left-right
+                            BT = bottom-top  RL = right-left
+
+ID[Label text]              node definition — ID is any word (\w+),
+                            label is free text (no ] or | characters)
+
+A --> B                     directed edge from A to B
+A -->|edge label| B         edge with a short label centered on the line
+
+%% pos ID x,y               sets the node's canvas position in pixels
+                            include these for every node so the layout
+                            renders immediately without manual arrangement
+
+── Layout conventions ──────────────────────────────────────────────────────
+
+- Horizontal spacing:  ~100 px between parallel nodes
+- Vertical spacing:    ~100 px between sequential steps
+- Start near x=200, y=100 so the diagram is centered on first load
+- For left-right graphs swap the role of x and y spacing accordingly
+- Keep IDs short: single letters A–Z for small graphs, then AA AB AC …
+
+── Full example ────────────────────────────────────────────────────────────
+
+graph TD
+  A[Start]
+  B[Do the thing]
+  C[Decision]
+  D[Path A]
+  E[Path B]
+  F[End]
+
+  A --> B
+  B --> C
+  C -->|yes| D
+  C -->|no| E
+  D --> F
+  E --> F
+
+  %% pos A 200,100
+  %% pos B 200,200
+  %% pos C 200,300
+  %% pos D 100,400
+  %% pos E 300,400
+  %% pos F 200,500
+
+── Notes ────────────────────────────────────────────────────────────────────
+
+- Paste the block into the mermaid panel and press Apply or Ctrl+Enter
+- Right-click any arrow to add a label or remove it
+- Left-click drag on empty canvas to rubber-band select multiple nodes,
+  then drag the group together
+- Right-click a node for connect / remove options
+- The mermaid panel text is the source of truth; edits there override canvas
+</div>
+
+<div class="topbar">
+  <div class="prompt">$ <a href="https://ad.hoc.run">ad.hoc.run</a> → <span class="path">flow.hoc.run</span></div>
+  <div class="controls">
+    <label>wrap <input id="wrap-input" type="number" value="30" min="0" max="500"> chars</label>
+    <div class="sep"></div>
+    <button id="undo-btn" disabled title="Ctrl+Z">undo</button>
+    <button id="redo-btn" disabled title="Ctrl+Shift+Z">redo</button>
+    <div class="sep"></div>
+    <button id="mermaid-btn" class="active" title="Toggle text panel">mermaid</button>
+    <button id="history-btn" title="Toggle history panel">history</button>
+  </div>
+</div>
+
+<div id="main">
+  <div id="canvas-wrap">
+    <canvas id="c"></canvas>
+    <div id="mode-bar"></div>
+    <textarea id="node-input" spellcheck="false"></textarea>
+    <input id="edge-label-input" type="text" spellcheck="false">
+    <div id="ctx-menu"></div>
+  </div>
+
+  <div id="right-panel">
+    <div id="text-panel" class="sub-panel">
+      <textarea id="txt" spellcheck="false">graph TD</textarea>
+      <div class="panel-foot">
+        <button id="apply-btn">apply (Ctrl+Enter)</button>
+      </div>
+    </div>
+    <div id="history-panel" class="sub-panel" style="display:none">
+      <div id="history-list"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const cwrap = document.getElementById('canvas-wrap');
+const ctxMenu = document.getElementById('ctx-menu');
+const nodeInput = document.getElementById('node-input');
+const edgeLabelInput = document.getElementById('edge-label-input');
+const modeBar = document.getElementById('mode-bar');
+const txtArea = document.getElementById('txt');
+const applyBtn = document.getElementById('apply-btn');
+const wrapInput = document.getElementById('wrap-input');
+const undoBtn = document.getElementById('undo-btn');
+const redoBtn = document.getElementById('redo-btn');
+const mermaidBtn = document.getElementById('mermaid-btn');
+const historyBtn = document.getElementById('history-btn');
+const rightPanel = document.getElementById('right-panel');
+const textPanel = document.getElementById('text-panel');
+const historyPanel = document.getElementById('history-panel');
+const historyList = document.getElementById('history-list');
+
+// ── Colors ──
+const C_BG     = '#0d0d0d';
+const C_FG     = '#e2e2e2';
+const C_DIM    = '#666666';
+const C_ACCENT = '#00ff88';
+const C_BORDER = '#2a2a2a';
+const C_NODE   = '#161616';
+const C_HINT   = '#333333';
+
+// ── State ──
+let nodes = [];
+let edges = [];
+let nextIdNum = 0;
+
+// ── View ──
+let panX = 0, panY = 0, zoom = 1;
+let wrapChars = 30;
+
+// ── Interaction ──
+let leftDown = false, rightDown = false;
+let didDrag = false, didPan = false;
+let dragNode = null, dragOffX = 0, dragOffY = 0;
+let mouseStartX = 0, mouseStartY = 0;
+let lastMouseX = 0, lastMouseY = 0;
+let mouseWorldX = 0, mouseWorldY = 0;
+let connectingFrom = null;
+let editingNode = null;
+let editOldLabel = '';
+let editingEdge = null;
+const DRAG_THRESH = 4;
+
+// ── Selection ──
+let selectedNodes = new Set();
+let isSelecting = false;
+let selectStartW = { x: 0, y: 0 };
+let isDraggingGroup = false;
+let groupDragOffsets = [];
+
+// ── Panels ──
+let activePanel = 'mermaid';
+
+// ── Constants ──
+const NODE_PAD_X = 16;
+const NODE_PAD_Y = 8;
+const MIN_NODE_W = 80;
+const MIN_NODE_H = 36;
+const LINE_H = 18;
+const FONT = '14px "Fira Code", "Consolas", "Courier New", monospace';
+const LABEL_FONT = '12px "Fira Code", "Consolas", "Courier New", monospace';
+const GRID_SIZE = 40;
+
+// ── Undo/Redo ──
+let history = [];
+let historyIdx = -1;
+
+function cloneState() {
+  return { nodes: nodes.map(n => ({...n})), edges: edges.map(e => ({...e})) };
+}
+
+function saveState(desc) {
+  history = history.slice(0, historyIdx + 1);
+  history.push({ ...cloneState(), desc });
+  if (history.length > 200) history.shift();
+  historyIdx = history.length - 1;
+  updateUndoRedo();
+  renderHistory();
+}
+
+function restoreState(idx) {
+  if (idx < 0 || idx >= history.length) return;
+  if (editingNode) {
+    editingNode.label = editOldLabel;
+    editingNode = null;
+    nodeInput.style.display = 'none';
+  }
+  closeEdgeLabelEditor(false);
+  connectingFrom = null;
+  selectedNodes.clear();
+  isSelecting = false;
+  isDraggingGroup = false;
+  setMode(null);
+  hideMenu();
+  historyIdx = idx;
+  const st = history[idx];
+  nodes = st.nodes.map(n => ({...n}));
+  edges = st.edges.map(e => ({...e}));
+  let maxNum = -1;
+  for (const n of nodes)
+    if (/^[A-Z]+$/.test(n.id)) maxNum = Math.max(maxNum, idToNum(n.id));
+  nextIdNum = Math.max(0, maxNum + 1);
+  updateMermaid();
+  updateUndoRedo();
+  renderHistory();
+}
+
+function undo() { if (historyIdx > 0) restoreState(historyIdx - 1); }
+function redo() { if (historyIdx < history.length - 1) restoreState(historyIdx + 1); }
+
+function updateUndoRedo() {
+  undoBtn.disabled = historyIdx <= 0;
+  redoBtn.disabled = historyIdx >= history.length - 1;
+}
+
+function renderHistory() {
+  historyList.innerHTML = '';
+  for (let i = history.length - 1; i >= 0; i--) {
+    const el = document.createElement('div');
+    el.className = 'hist-entry' + (i === historyIdx ? ' current' : '');
+    el.textContent = history[i].desc;
+    const idx = i;
+    el.addEventListener('click', () => restoreState(idx));
+    historyList.appendChild(el);
+  }
+  const cur = historyList.querySelector('.current');
+  if (cur) cur.scrollIntoView({ block: 'nearest' });
+}
+
+undoBtn.addEventListener('click', undo);
+redoBtn.addEventListener('click', redo);
+
+// ── Panel Toggle ──
+function setPanel(name) {
+  activePanel = activePanel === name ? null : name;
+  if (activePanel) {
+    rightPanel.classList.remove('hidden');
+    textPanel.style.display = activePanel === 'mermaid' ? 'flex' : 'none';
+    historyPanel.style.display = activePanel === 'history' ? 'flex' : 'none';
+  } else {
+    rightPanel.classList.add('hidden');
+  }
+  mermaidBtn.classList.toggle('active', activePanel === 'mermaid');
+  historyBtn.classList.toggle('active', activePanel === 'history');
+}
+
+mermaidBtn.addEventListener('click', () => setPanel('mermaid'));
+historyBtn.addEventListener('click', () => setPanel('history'));
+
+// ── ID Generation ──
+function numToId(n) {
+  let id = '', v = n;
+  do {
+    id = String.fromCharCode(65 + (v % 26)) + id;
+    v = Math.floor(v / 26) - 1;
+  } while (v >= 0);
+  return id;
+}
+
+function idToNum(id) {
+  let n = 0;
+  for (let i = 0; i < id.length; i++) n = n * 26 + (id.charCodeAt(i) - 64);
+  return n - 1;
+}
+
+function genId() { return numToId(nextIdNum++); }
+
+// ── Coordinate Transforms ──
+function s2w(sx, sy) { return { x: (sx - panX) / zoom, y: (sy - panY) / zoom }; }
+function w2s(wx, wy) { return { x: wx * zoom + panX, y: wy * zoom + panY }; }
+
+// ── Text Wrapping ──
+function wrapLines(text, maxPxW) {
+  ctx.font = FONT;
+  const t = text || ' ';
+  if (!isFinite(maxPxW) || maxPxW <= 0 || ctx.measureText(t).width <= maxPxW) return [t];
+  const words = t.split(' ');
+  const result = [];
+  let line = '';
+  for (const word of words) {
+    if (!word) continue;
+    if (ctx.measureText(word).width > maxPxW) {
+      if (line) { result.push(line); line = ''; }
+      let chunk = '';
+      for (const ch of word) {
+        if (ctx.measureText(chunk + ch).width > maxPxW && chunk) {
+          result.push(chunk); chunk = ch;
+        } else { chunk += ch; }
+      }
+      line = chunk;
+      continue;
+    }
+    const test = line ? line + ' ' + word : word;
+    if (ctx.measureText(test).width > maxPxW && line) {
+      result.push(line); line = word;
+    } else { line = test; }
+  }
+  if (line) result.push(line);
+  return result.length ? result : [' '];
+}
+
+// ── Node Geometry ──
+function nodeSize(label) {
+  ctx.font = FONT;
+  const charW = ctx.measureText('M').width;
+  const maxPxW = wrapChars > 0 ? wrapChars * charW : Infinity;
+  const lines = wrapLines(label, maxPxW);
+  let maxW = 0;
+  for (const l of lines) maxW = Math.max(maxW, ctx.measureText(l).width);
+  const w = Math.max(MIN_NODE_W, maxW + NODE_PAD_X * 2);
+  const h = Math.max(MIN_NODE_H, lines.length * LINE_H + NODE_PAD_Y * 2);
+  return { w, h, lines };
+}
+
+function nodeAt(wx, wy) {
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const n = nodes[i];
+    const { w, h } = nodeSize(n.label);
+    if (wx >= n.x - w/2 && wx <= n.x + w/2 && wy >= n.y - h/2 && wy <= n.y + h/2) return n;
+  }
+  return null;
+}
+
+function boxEdge(cx, cy, hw, hh, tx, ty) {
+  let dx = tx - cx, dy = ty - cy;
+  if (dx === 0 && dy === 0) return { x: cx, y: cy - hh };
+  let s;
+  if (dx === 0) s = hh / Math.abs(dy);
+  else if (dy === 0) s = hw / Math.abs(dx);
+  else s = Math.min(hw / Math.abs(dx), hh / Math.abs(dy));
+  return { x: cx + dx * s, y: cy + dy * s };
+}
+
+// ── Edge Hit Detection ──
+function distToSegment(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx*dx + dy*dy;
+  if (lenSq === 0) return Math.hypot(px - ax, py - ay);
+  const t = Math.max(0, Math.min(1, ((px - ax)*dx + (py - ay)*dy) / lenSq));
+  return Math.hypot(px - (ax + t*dx), py - (ay + t*dy));
+}
+
+function edgeAt(wx, wy) {
+  const threshold = 8 / zoom;
+  for (let i = edges.length - 1; i >= 0; i--) {
+    const e = edges[i];
+    const fn = nodes.find(n => n.id === e.from);
+    const tn = nodes.find(n => n.id === e.to);
+    if (!fn || !tn) continue;
+    const fs = nodeSize(fn.label), ts = nodeSize(tn.label);
+    const p1 = boxEdge(fn.x, fn.y, fs.w/2, fs.h/2, tn.x, tn.y);
+    const p2 = boxEdge(tn.x, tn.y, ts.w/2, ts.h/2, fn.x, fn.y);
+    if (distToSegment(wx, wy, p1.x, p1.y, p2.x, p2.y) < threshold) return e;
+  }
+  return null;
+}
+
+// ── Drawing ──
+function drawArrowHead(x, y, angle) {
+  const len = 10 / zoom;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x - len * Math.cos(angle - 0.45), y - len * Math.sin(angle - 0.45));
+  ctx.lineTo(x - len * Math.cos(angle + 0.45), y - len * Math.sin(angle + 0.45));
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawRoundedRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  const cw = cwrap.clientWidth, ch = cwrap.clientHeight;
+  canvas.width = cw * dpr;
+  canvas.height = ch * dpr;
+  canvas.style.width = cw + 'px';
+  canvas.style.height = ch + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  ctx.fillStyle = C_BG;
+  ctx.fillRect(0, 0, cw, ch);
+
+  if (nodes.length === 0 && !connectingFrom) {
+    ctx.fillStyle = C_HINT;
+    ctx.font = FONT;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('right-click to add a node', cw / 2, ch / 2);
+  }
+
+  ctx.save();
+  ctx.translate(panX, panY);
+  ctx.scale(zoom, zoom);
+
+  // Grid
+  const vl = -panX / zoom, vt = -panY / zoom;
+  const vr = vl + cw / zoom, vb = vt + ch / zoom;
+  ctx.fillStyle = C_BORDER;
+  const gx0 = Math.floor(vl / GRID_SIZE) * GRID_SIZE;
+  const gy0 = Math.floor(vt / GRID_SIZE) * GRID_SIZE;
+  for (let x = gx0; x <= vr; x += GRID_SIZE)
+    for (let y = gy0; y <= vb; y += GRID_SIZE)
+      ctx.fillRect(x - 0.8, y - 0.8, 1.6, 1.6);
+
+  // Edges
+  const lw = 2 / zoom;
+  for (const e of edges) {
+    const fn = nodes.find(n => n.id === e.from);
+    const tn = nodes.find(n => n.id === e.to);
+    if (!fn || !tn) continue;
+    const fs = nodeSize(fn.label), ts = nodeSize(tn.label);
+    const p1 = boxEdge(fn.x, fn.y, fs.w/2, fs.h/2, tn.x, tn.y);
+    const p2 = boxEdge(tn.x, tn.y, ts.w/2, ts.h/2, fn.x, fn.y);
+    const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+    ctx.strokeStyle = C_DIM;
+    ctx.lineWidth = lw;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+    ctx.fillStyle = C_DIM;
+    drawArrowHead(p2.x, p2.y, angle);
+
+    // Edge label
+    if (e.label && editingEdge !== e) {
+      const mx = (p1.x + p2.x) / 2;
+      const my = (p1.y + p2.y) / 2;
+      ctx.font = LABEL_FONT;
+      const tw = ctx.measureText(e.label).width;
+      const lh = 14 / zoom;
+      const px = 4 / zoom, py = 2 / zoom;
+      ctx.fillStyle = C_BG;
+      ctx.fillRect(mx - tw/2 - px, my - lh/2 - py, tw + px*2, lh + py*2);
+      ctx.fillStyle = C_FG;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(e.label, mx, my);
+    }
+  }
+
+  // Connecting preview
+  if (connectingFrom) {
+    const fn = nodes.find(n => n.id === connectingFrom);
+    if (fn) {
+      const fs = nodeSize(fn.label);
+      const p1 = boxEdge(fn.x, fn.y, fs.w/2, fs.h/2, mouseWorldX, mouseWorldY);
+      ctx.strokeStyle = C_ACCENT;
+      ctx.lineWidth = lw;
+      ctx.setLineDash([6 / zoom, 4 / zoom]);
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(mouseWorldX, mouseWorldY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  // Selection box
+  if (isSelecting && didDrag) {
+    const rx = Math.min(selectStartW.x, mouseWorldX);
+    const ry = Math.min(selectStartW.y, mouseWorldY);
+    const rw = Math.abs(mouseWorldX - selectStartW.x);
+    const rh = Math.abs(mouseWorldY - selectStartW.y);
+    ctx.strokeStyle = C_ACCENT;
+    ctx.lineWidth = 1 / zoom;
+    ctx.setLineDash([4 / zoom, 3 / zoom]);
+    ctx.strokeRect(rx, ry, rw, rh);
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(0,255,136,0.04)';
+    ctx.fillRect(rx, ry, rw, rh);
+  }
+
+  // Nodes
+  for (const n of nodes) {
+    const { w, h, lines } = nodeSize(n.label);
+    const isSource = connectingFrom === n.id;
+    const isSelected = selectedNodes.has(n.id);
+    const isHover = !connectingFrom && dragNode === n;
+
+    ctx.fillStyle = isSource ? '#0a1f14' : C_NODE;
+    ctx.strokeStyle = isSource ? C_ACCENT : (isSelected ? C_ACCENT : (isHover ? '#888888' : C_BORDER));
+    ctx.lineWidth = (isSource || isSelected ? 2 : 1.5) / zoom;
+
+    drawRoundedRect(n.x - w/2, n.y - h/2, w, h, 4 / zoom);
+    ctx.fill();
+    ctx.stroke();
+
+    if (editingNode !== n) {
+      ctx.font = FONT;
+      ctx.fillStyle = C_FG;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const totalH = lines.length * LINE_H;
+      const startY = n.y - totalH / 2 + LINE_H / 2;
+      for (let i = 0; i < lines.length; i++)
+        ctx.fillText(lines[i], n.x, startY + i * LINE_H);
+    }
+  }
+
+  ctx.restore();
+}
+
+// ── Mermaid I/O ──
+function updateMermaid() {
+  const lines = ['graph TD'];
+  for (const n of nodes) lines.push('  ' + n.id + '[' + n.label + ']');
+  for (const e of edges) {
+    const lbl = e.label ? '|' + e.label + '|' : '';
+    lines.push('  ' + e.from + ' -->' + lbl + ' ' + e.to);
+  }
+  if (nodes.length) {
+    lines.push('');
+    for (const n of nodes)
+      lines.push('%% pos ' + n.id + ' ' + Math.round(n.x) + ',' + Math.round(n.y));
+  }
+  txtArea.value = lines.join('\n');
+}
+
+function parseMermaid(text) {
+  const ns = new Map(), es = [], positions = new Map();
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || /^graph\s/i.test(line)) continue;
+    let m = line.match(/^%%\s*pos\s+(\w+)\s+([\d.-]+),([\d.-]+)/);
+    if (m) { positions.set(m[1], { x: parseFloat(m[2]), y: parseFloat(m[3]) }); continue; }
+    if (line.startsWith('%%')) continue;
+    // Edge: A[lbl] -->|edgelbl| B[lbl]  (all parts optional)
+    m = line.match(/^(\w+)(?:\[([^\]]*)\])?\s*-->(?:\|([^|]*)\|)?\s*(\w+)(?:\[([^\]]*)\])?\s*$/);
+    if (m) {
+      const [, fromId, fromLbl, edgeLbl, toId, toLbl] = m;
+      if (fromLbl != null) ns.set(fromId, fromLbl); else if (!ns.has(fromId)) ns.set(fromId, fromId);
+      if (toLbl != null) ns.set(toId, toLbl); else if (!ns.has(toId)) ns.set(toId, toId);
+      es.push({ from: fromId, to: toId, label: edgeLbl || '' });
+      continue;
+    }
+    // Standalone node: A[lbl]
+    m = line.match(/^(\w+)\[([^\]]*)\]\s*$/);
+    if (m) ns.set(m[1], m[2]);
+  }
+  return { nodes: ns, edges: es, positions };
+}
+
+function applyMermaid() {
+  closeEditor();
+  closeEdgeLabelEditor(false);
+  const parsed = parseMermaid(txtArea.value);
+  const oldPos = {};
+  for (const n of nodes) oldPos[n.id] = { x: n.x, y: n.y };
+
+  nodes = [];
+  let placedY = 80;
+  const centerX = (cwrap.clientWidth / 2 - panX) / zoom;
+  for (const [id, label] of parsed.nodes) {
+    if (parsed.positions.has(id)) {
+      const p = parsed.positions.get(id);
+      nodes.push({ id, label, x: p.x, y: p.y });
+    } else if (oldPos[id]) {
+      nodes.push({ id, label, x: oldPos[id].x, y: oldPos[id].y });
+    } else {
+      nodes.push({ id, label, x: centerX, y: placedY });
+      placedY += 70;
+    }
+  }
+
+  const edgeSet = new Set();
+  edges = [];
+  for (const e of parsed.edges) {
+    const key = e.from + '->' + e.to;
+    if (!edgeSet.has(key)) { edgeSet.add(key); edges.push(e); }
+  }
+
+  let maxNum = -1;
+  for (const n of nodes)
+    if (/^[A-Z]+$/.test(n.id)) maxNum = Math.max(maxNum, idToNum(n.id));
+  nextIdNum = Math.max(0, maxNum + 1);
+
+  updateMermaid();
+  saveState('apply text');
+}
+
+applyBtn.addEventListener('click', applyMermaid);
+txtArea.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); applyMermaid(); }
+});
+
+// ── Context Menu ──
+function showMenu(sx, sy, items) {
+  ctxMenu.innerHTML = '';
+  for (const item of items) {
+    const div = document.createElement('div');
+    div.textContent = item.label;
+    div.addEventListener('mousedown', e => { e.stopPropagation(); ctxMenu.style.display = 'none'; item.action(); });
+    ctxMenu.appendChild(div);
+  }
+  ctxMenu.style.left = sx + 'px';
+  ctxMenu.style.top = sy + 'px';
+  ctxMenu.style.display = 'block';
+}
+function hideMenu() { ctxMenu.style.display = 'none'; }
+
+// ── Node Editor ──
+function positionEditor() {
+  if (!editingNode) return;
+  const { w, h } = nodeSize(editingNode.label);
+  const s = w2s(editingNode.x, editingNode.y);
+  const sw = w * zoom, sh = h * zoom;
+  nodeInput.style.left = (s.x - sw/2) + 'px';
+  nodeInput.style.top = (s.y - sh/2) + 'px';
+  nodeInput.style.width = sw + 'px';
+  nodeInput.style.height = sh + 'px';
+  nodeInput.style.fontSize = (14 * zoom) + 'px';
+  nodeInput.style.lineHeight = (LINE_H * zoom) + 'px';
+  nodeInput.style.padding = (NODE_PAD_Y * zoom) + 'px ' + (NODE_PAD_X * zoom) + 'px';
+}
+
+function openEditor(node) {
+  editingNode = node;
+  editOldLabel = node.label;
+  nodeInput.value = node.label;
+  nodeInput.style.display = 'block';
+  positionEditor();
+  nodeInput.focus();
+  nodeInput.select();
+}
+
+function closeEditor() {
+  if (!editingNode) return;
+  const val = nodeInput.value.replace(/\n/g, ' ').trim();
+  const newLabel = val || 'node';
+  const changed = newLabel !== editOldLabel;
+  const nid = editingNode.id;
+  editingNode.label = newLabel;
+  editingNode = null;
+  nodeInput.style.display = 'none';
+  updateMermaid();
+  if (changed) saveState('edit ' + nid);
+}
+
+nodeInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); closeEditor(); }
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    editingNode.label = editOldLabel;
+    editingNode = null;
+    nodeInput.style.display = 'none';
+    updateMermaid();
+  }
+});
+
+nodeInput.addEventListener('input', () => {
+  if (!editingNode) return;
+  const val = nodeInput.value.replace(/\n/g, ' ');
+  if (val !== nodeInput.value) {
+    const pos = nodeInput.selectionStart - (nodeInput.value.length - val.length);
+    nodeInput.value = val;
+    nodeInput.selectionStart = nodeInput.selectionEnd = Math.max(0, pos);
+  }
+  editingNode.label = val || ' ';
+  positionEditor();
+});
+
+nodeInput.addEventListener('blur', () => closeEditor());
+
+// ── Edge Label Editor ──
+function positionEdgeLabel() {
+  if (!editingEdge) return;
+  const fn = nodes.find(n => n.id === editingEdge.from);
+  const tn = nodes.find(n => n.id === editingEdge.to);
+  if (!fn || !tn) return;
+  const fs = nodeSize(fn.label), ts = nodeSize(tn.label);
+  const p1 = boxEdge(fn.x, fn.y, fs.w/2, fs.h/2, tn.x, tn.y);
+  const p2 = boxEdge(tn.x, tn.y, ts.w/2, ts.h/2, fn.x, fn.y);
+  const s = w2s((p1.x + p2.x) / 2, (p1.y + p2.y) / 2);
+  edgeLabelInput.style.left = s.x + 'px';
+  edgeLabelInput.style.top = s.y + 'px';
+}
+
+function openEdgeLabelEditor(edge) {
+  editingEdge = edge;
+  edgeLabelInput.value = edge.label || '';
+  edgeLabelInput.style.display = 'block';
+  positionEdgeLabel();
+  setTimeout(() => {
+    if (editingEdge === edge) {
+      edgeLabelInput.focus();
+      edgeLabelInput.select();
+    }
+  }, 0);
+}
+
+function closeEdgeLabelEditor(save = true) {
+  if (!editingEdge) return;
+  if (save) {
+    const newLabel = edgeLabelInput.value.trim();
+    const changed = newLabel !== (editingEdge.label || '');
+    if (changed) {
+      editingEdge.label = newLabel;
+      updateMermaid();
+      saveState((newLabel ? 'label ' : 'remove label ') + editingEdge.from + ' \u2192 ' + editingEdge.to);
+    }
+  }
+  editingEdge = null;
+  edgeLabelInput.style.display = 'none';
+}
+
+edgeLabelInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); closeEdgeLabelEditor(true); }
+  if (e.key === 'Escape') { e.preventDefault(); closeEdgeLabelEditor(false); }
+});
+edgeLabelInput.addEventListener('blur', () => closeEdgeLabelEditor(true));
+
+// ── Mode Indicator ──
+function setMode(text) {
+  modeBar.textContent = text || '';
+  modeBar.style.display = text ? 'block' : 'none';
+}
+
+// ── Mouse Events ──
+function getMousePos(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+
+canvas.addEventListener('mousedown', e => {
+  hideMenu();
+  const { x, y } = getMousePos(e);
+  const w = s2w(x, y);
+  mouseStartX = x; mouseStartY = y;
+  lastMouseX = x; lastMouseY = y;
+
+  if (e.button === 0) {
+    leftDown = true;
+    didDrag = false;
+    if (connectingFrom) return;
+    const hit = nodeAt(w.x, w.y);
+    if (hit) {
+      dragNode = hit;
+      dragOffX = hit.x - w.x;
+      dragOffY = hit.y - w.y;
+      // Precompute group offsets in case we need them
+      if (selectedNodes.has(hit.id) && selectedNodes.size > 1) {
+        groupDragOffsets = [...selectedNodes].map(id => {
+          const n = nodes.find(n => n.id === id);
+          return { node: n, offX: n.x - w.x, offY: n.y - w.y };
+        });
+      }
+    } else {
+      selectedNodes.clear();
+      isSelecting = true;
+      selectStartW = { x: w.x, y: w.y };
+    }
+  } else if (e.button === 2) {
+    rightDown = true;
+    didPan = false;
+  }
+});
+
+canvas.addEventListener('mousemove', e => {
+  const { x, y } = getMousePos(e);
+  const w = s2w(x, y);
+  mouseWorldX = w.x;
+  mouseWorldY = w.y;
+  const dx = x - mouseStartX, dy = y - mouseStartY;
+
+  if (leftDown && !connectingFrom) {
+    if (dragNode) {
+      if (!didDrag && Math.hypot(dx, dy) > DRAG_THRESH) {
+        didDrag = true;
+        if (selectedNodes.has(dragNode.id) && selectedNodes.size > 1) {
+          isDraggingGroup = true;
+        }
+      }
+      if (didDrag) {
+        if (isDraggingGroup) {
+          for (const { node, offX, offY } of groupDragOffsets) {
+            node.x = w.x + offX;
+            node.y = w.y + offY;
+          }
+        } else {
+          dragNode.x = w.x + dragOffX;
+          dragNode.y = w.y + dragOffY;
+        }
+      }
+    }
+    if (isSelecting && Math.hypot(dx, dy) > DRAG_THRESH) didDrag = true;
+  }
+
+  if (rightDown) {
+    if (!didPan && Math.hypot(dx, dy) > DRAG_THRESH) didPan = true;
+    if (didPan) { panX += x - lastMouseX; panY += y - lastMouseY; }
+  }
+  lastMouseX = x;
+  lastMouseY = y;
+});
+
+canvas.addEventListener('mouseup', e => {
+  const { x, y } = getMousePos(e);
+  const w = s2w(x, y);
+
+  if (e.button === 0 && leftDown) {
+    leftDown = false;
+
+    if (isSelecting) {
+      isSelecting = false;
+      if (didDrag) {
+        const x1 = Math.min(selectStartW.x, mouseWorldX);
+        const y1 = Math.min(selectStartW.y, mouseWorldY);
+        const x2 = Math.max(selectStartW.x, mouseWorldX);
+        const y2 = Math.max(selectStartW.y, mouseWorldY);
+        for (const n of nodes) {
+          const { w: nw, h: nh } = nodeSize(n.label);
+          if (n.x - nw/2 >= x1 && n.x + nw/2 <= x2 && n.y - nh/2 >= y1 && n.y + nh/2 <= y2)
+            selectedNodes.add(n.id);
+        }
+      }
+      return;
+    }
+
+    if (!didDrag) {
+      const hit = nodeAt(w.x, w.y);
+      if (connectingFrom) {
+        if (hit && hit.id !== connectingFrom) {
+          const exists = edges.some(ed => ed.from === connectingFrom && ed.to === hit.id);
+          if (!exists) {
+            edges.push({ from: connectingFrom, to: hit.id, label: '' });
+            updateMermaid();
+            saveState('connect ' + connectingFrom + ' \u2192 ' + hit.id);
+          }
+        }
+        connectingFrom = null;
+        setMode(null);
+      } else if (hit) {
+        selectedNodes.clear();
+        closeEditor();
+        openEditor(hit);
+      }
+    } else if (isDraggingGroup) {
+      isDraggingGroup = false;
+      updateMermaid();
+      saveState('move selection');
+    } else {
+      updateMermaid();
+      if (dragNode) saveState('move ' + dragNode.id);
+    }
+    dragNode = null;
+  }
+
+  if (e.button === 2 && rightDown) {
+    rightDown = false;
+    if (!didPan) {
+      const hit = nodeAt(w.x, w.y);
+      if (hit) {
+        showMenu(x, y, [
+          { label: 'from (draw arrow)', action: () => {
+            selectedNodes.clear();
+            connectingFrom = hit.id;
+            setMode('click a node to connect \u2022 esc to cancel');
+          }},
+          { label: 'remove', action: () => {
+            const rid = hit.id;
+            selectedNodes.delete(rid);
+            nodes = nodes.filter(n => n.id !== rid);
+            edges = edges.filter(ed => ed.from !== rid && ed.to !== rid);
+            updateMermaid();
+            saveState('remove ' + rid);
+          }}
+        ]);
+      } else {
+        const hitEdge = edgeAt(w.x, w.y);
+        if (hitEdge) {
+          showMenu(x, y, [
+            { label: hitEdge.label ? 'edit label' : 'add label', action: () => openEdgeLabelEditor(hitEdge) },
+            { label: 'remove', action: () => {
+              edges = edges.filter(ed => ed !== hitEdge);
+              updateMermaid();
+              saveState('remove edge ' + hitEdge.from + ' \u2192 ' + hitEdge.to);
+            }}
+          ]);
+        } else {
+          showMenu(x, y, [
+            { label: 'add node', action: () => {
+              const id = genId();
+              nodes.push({ id, label: 'node', x: w.x, y: w.y });
+              updateMermaid();
+              saveState('add node ' + id);
+              setTimeout(() => openEditor(nodes[nodes.length - 1]), 30);
+            }}
+          ]);
+        }
+      }
+    }
+  }
+});
+
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const { x, y } = getMousePos(e);
+  const oldZoom = zoom;
+  zoom = Math.max(0.15, Math.min(6, zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+  panX = x - (x - panX) * (zoom / oldZoom);
+  panY = y - (y - panY) * (zoom / oldZoom);
+}, { passive: false });
+
+document.addEventListener('keydown', e => {
+  if (e.target !== txtArea && e.target !== nodeInput && e.target !== edgeLabelInput) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'Z' && e.shiftKey) || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); redo(); return; }
+  }
+  if (e.key === 'Escape') {
+    if (connectingFrom) { connectingFrom = null; setMode(null); }
+    selectedNodes.clear();
+    isSelecting = false;
+    hideMenu();
+  }
+});
+
+document.addEventListener('mousedown', e => {
+  if (!ctxMenu.contains(e.target)) hideMenu();
+});
+
+// ── Settings ──
+wrapInput.addEventListener('input', () => { wrapChars = parseInt(wrapInput.value) || 0; });
+
+// ── Render Loop ──
+function frame() {
+  draw();
+  if (editingNode) positionEditor();
+  if (editingEdge) positionEdgeLabel();
+  requestAnimationFrame(frame);
+}
+frame();
+updateMermaid();
+saveState('initial state');
+</script>
+</body>
+</html>
